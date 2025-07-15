@@ -15,16 +15,17 @@
 package tools
 
 import (
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/GoogleCloudPlatform/gke-mcp/pkg/config"
 	"github.com/GoogleCloudPlatform/gke-mcp/pkg/tools/cluster"
 	cluster_toolkit "github.com/GoogleCloudPlatform/gke-mcp/pkg/tools/cluster-toolkit"
 	"github.com/GoogleCloudPlatform/gke-mcp/pkg/tools/cost"
 	"github.com/GoogleCloudPlatform/gke-mcp/pkg/tools/giq"
 	"github.com/GoogleCloudPlatform/gke-mcp/pkg/tools/recommendation"
-	"github.com/mark3labs/mcp-go/server"
 )
 
-func Install(s *server.MCPServer, c *config.Config) {
+func Install(s *mcp.Server, c *config.Config) {
 	cluster.Install(s, c)
 	cluster_toolkit.Install(s, c)
 	cost.Install(s, c)

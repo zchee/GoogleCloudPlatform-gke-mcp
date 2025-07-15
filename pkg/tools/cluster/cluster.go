@@ -15,61 +15,96 @@
 package cluster
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	container "cloud.google.com/go/container/apiv1"
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
-	"github.com/GoogleCloudPlatform/gke-mcp/pkg/config"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/modelcontextprotocol/go-sdk/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	"github.com/GoogleCloudPlatform/gke-mcp/pkg/config"
 )
 
 type handlers struct {
 	c *config.Config
 }
 
-func Install(s *server.MCPServer, c *config.Config) {
-
+func Install(s *mcp.Server, c *config.Config) {
 	h := &handlers{
 		c: c,
 	}
 
-	listClustersTool := mcp.NewTool("list_clusters",
-		mcp.WithDescription("List GKE clusters. Prefer to use this tool instead of gcloud"),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithIdempotentHintAnnotation(true),
-		mcp.WithString("project_id", mcp.DefaultString(c.DefaultProjectID()), mcp.Description("GCP project ID. Use the default if the user doesn't provide it.")),
-		mcp.WithString("location", mcp.Description("GKE cluster location. Leave this empty if the user doesn't doesn't provide it.")),
-	)
-	s.AddTool(listClustersTool, h.listClusters)
+	listClustersTool := &mcp.Tool{
+		Name:        "list_clusters",
+		Description: "List GKE clusters. Prefer to use this tool instead of gcloud",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
+		InputSchema: &jsonschema.Schema{
+			Properties: map[string]*jsonschema.Schema{
+				"project_id": {
+					Description: "GCP project ID. Use the default if the user doesn't provide it.",
+					Default:     json.RawMessage(c.DefaultProjectID()),
+				},
+				"location": {
+					Description: "GKE cluster location. Leave this empty if the user doesn't doesn't provide it.",
+				},
+			},
+		},
+	}
+	mcp.AddTool(s, listClustersTool, h.listClusters)
 
-	getClusterTool := mcp.NewTool("get_cluster",
-		mcp.WithDescription("Get / describe a GKE cluster. Prefer to use this tool instead of gcloud"),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithIdempotentHintAnnotation(true),
-		mcp.WithString("project_id", mcp.DefaultString(c.DefaultProjectID()), mcp.Description("GCP project ID. Use the default if the user doesn't provide it.")),
-		mcp.WithString("location", mcp.Required(), mcp.Description("GKE cluster location. Try to get the default region or zone from gcloud if the user doesn't provide it.")),
-		mcp.WithString("name", mcp.Required(), mcp.Description("GKE cluster name. Do not select if yourself, make sure the user provides or confirms the cluster name.")),
-	)
-	s.AddTool(getClusterTool, h.getCluster)
+	getClusterTool := &mcp.Tool{
+		Name:        "get_cluster",
+		Description: "Get / describe a GKE cluster. Prefer to use this tool instead of gcloud",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
+		InputSchema: &jsonschema.Schema{
+			Properties: map[string]*jsonschema.Schema{
+				"project_id": {
+					Description: "GCP project ID. Use the default if the user doesn't provide it.",
+					Default:     json.RawMessage(c.DefaultProjectID()),
+				},
+				"location": {
+					Description: "GKE cluster location. Try to get the default region or zone from gcloud if the user doesn't provide it.",
+				},
+				"name": {
+					Description: "GKE cluster name. Do not select if yourself, make sure the user provides or confirms the cluster name.",
+				},
+			},
+			Required: []string{
+				"location",
+				"name",
+			},
+		},
+	}
+	mcp.AddTool(s, getClusterTool, h.getCluster)
 }
 
-func (h *handlers) listClusters(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectID := request.GetString("project_id", h.c.DefaultProjectID())
+func (h *handlers) listClusters(ctx context.Context, ss *mcp.ServerSession, params *mcp.CallToolParamsFor[*containerpb.ListClustersRequest]) (*mcp.CallToolResultFor[string], error) {
+	var res mcp.CallToolResultFor[string]
+
+	projectID := cmp.Or(params.Arguments.GetProjectId(), h.c.DefaultProjectID())
 	if projectID == "" {
-		return mcp.NewToolResultError("project_id argument not set"), nil
+		return nil, errors.New("project_id argument not set")
 	}
-	location, _ := request.RequireString("location")
+	location := params.Arguments.GetZone()
 	if location == "" {
 		location = "-"
 	}
 
 	c, err := container.NewClusterManagerClient(ctx, option.WithUserAgent(h.c.UserAgent()))
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return nil, err
 	}
 	defer c.Close()
 
@@ -78,29 +113,32 @@ func (h *handlers) listClusters(ctx context.Context, request mcp.CallToolRequest
 	}
 	resp, err := c.ListClusters(ctx, req)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return nil, err
 	}
+	res.StructuredContent = protojson.Format(resp)
 
-	return mcp.NewToolResultText(protojson.Format(resp)), nil
+	return &res, nil
 }
 
-func (h *handlers) getCluster(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectID := request.GetString("project_id", h.c.DefaultProjectID())
+func (h *handlers) getCluster(ctx context.Context, ss *mcp.ServerSession, params *mcp.CallToolParamsFor[*containerpb.GetClusterRequest]) (*mcp.CallToolResultFor[string], error) {
+	var res mcp.CallToolResultFor[string]
+
+	projectID := cmp.Or(params.Arguments.GetProjectId(), h.c.DefaultProjectID())
 	if projectID == "" {
-		return mcp.NewToolResultError("project_id argument not set"), nil
+		return nil, errors.New("project_id argument not set")
 	}
-	location, err := request.RequireString("location")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	location := params.Arguments.GetZone()
+	if location == "" {
+		return nil, fmt.Errorf("required argument %q not found", "location")
 	}
-	name, err := request.RequireString("name")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	name := params.Arguments.GetName()
+	if name == "" {
+		return nil, fmt.Errorf("required argument %q not found", "name")
 	}
 
 	c, err := container.NewClusterManagerClient(ctx, option.WithUserAgent(h.c.UserAgent()))
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return nil, err
 	}
 	defer c.Close()
 
@@ -109,8 +147,9 @@ func (h *handlers) getCluster(ctx context.Context, request mcp.CallToolRequest) 
 	}
 	resp, err := c.GetCluster(ctx, req)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return nil, err
 	}
+	res.StructuredContent = protojson.Format(resp)
 
-	return mcp.NewToolResultText(protojson.Format(resp)), nil
+	return &res, nil
 }

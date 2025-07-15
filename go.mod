@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/container v1.43.0
 	cloud.google.com/go/recommender v1.13.5
 	github.com/mark3labs/mcp-go v0.32.0
+	github.com/modelcontextprotocol/go-sdk v0.2.0
 	google.golang.org/api v0.233.0
 	google.golang.org/protobuf v1.36.6
 )
